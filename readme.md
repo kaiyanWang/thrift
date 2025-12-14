@@ -6,4 +6,4 @@ thrift
 
 数据存储结点
 
-游戏结点调用匹配系统结点的add_user和remove_user接口，匹配系统结点调用数据存储结点的接口
+游戏结点调用匹配系统结点的add_user和remove_user接口，匹配系统结点调用数据存储结点的save_data接口
