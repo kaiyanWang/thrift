@@ -3,12 +3,16 @@
 
 #include "match_server/Match.h"
 #include "save_client/Save.h"
+#include <thrift/concurrency/ThreadManager.h>
+#include <thrift/concurrency/ThreadFactory.h>
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/server/TSimpleServer.h>
+#include <thrift/server/TThreadedServer.h>
 #include <thrift/transport/TServerSocket.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TTransportUtils.h>
 #include <thrift/transport/TSocket.h>
+#include <thrift/TToString.h>
 
 #include <iostream>
 #include <thread>
@@ -28,164 +32,178 @@ using namespace ::save_service;
 using namespace std;
 
 struct Task {
-    User user;
-    string type;
+	User user;
+	string type;
 };
 
 struct MessageQueue {
-    queue<Task> q;
-    mutex m;
-    condition_variable cv;
+	queue<Task> q;
+	mutex m;
+	condition_variable cv;
 }message_queue;
 
 class pool {
-    public:
-        void save_result(int a, int b) {
-            printf("Match Result: %d %d\n", a, b);
-        }
-        void save_result1(int a, int b) {
-            printf("Match Result: %d %d\n", a, b);
+	public:
+		void save_result(int a, int b) {
+			printf("Match Result: %d %d\n", a, b);
+		}
+		void save_result1(int a, int b) {
+			printf("Match Result: %d %d\n", a, b);
 
-            std::shared_ptr<TTransport> socket(new TSocket("123.57.47.211", 9090));
-            std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-            std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-            SaveClient client(protocol);
+			std::shared_ptr<TTransport> socket(new TSocket("123.57.47.211", 9090));
+			std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+			std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+			SaveClient client(protocol);
 
-            try {
-                transport->open();
+			try {
+				transport->open();
 
-                int res = client.save_data("acs_0", "6e822f5b", a, b);
+				int res = client.save_data("acs_0", "6e822f5b", a, b);
 
-                if (!res) puts("success");
-                else puts("failed");
+				if (!res) puts("success");
+				else puts("failed");
 
-                transport->close();
-            } catch (TException& tx) {
-                cout << "ERROR: " << tx.what() << endl;
-            }
+				transport->close();
+			} catch (TException& tx) {
+				cout << "ERROR: " << tx.what() << endl;
+			}
 
-        }
-        void match() {
-            while(users.size() > 1) {
-                // //无脑匹配前两个
-                // auto a = users[0], b = users[1];
-                // users.erase(users.begin());
-                // users.erase(users.begin());  // 删掉了第一个，第二个就变成了第一个
-                // save_result(a.id, b.id);
+		}
+		void match() {
+			while(users.size() > 1) {
+				// //无脑匹配前两个
+				// auto a = users[0], b = users[1];
+				// users.erase(users.begin());
+				// users.erase(users.begin());  // 删掉了第一个，第二个就变成了第一个
+				// save_result(a.id, b.id);
 
-                // 按分值匹配
-                sort(users.begin(), users.end(), [&](User& a, User b){
-                    return a.score < b.score;
-                });  // 按分值排序
+				// 按分值匹配
+				sort(users.begin(), users.end(), [&](User& a, User b){
+						return a.score < b.score;
+						});  // 按分值排序
 
-                bool flag = true;
+				bool flag = true;
 
-                for (uint32_t i = 1; i < users.size(); i++) {
-                    auto a = users[i - 1], b = users[i];
-                    if (b.score - a.score <= 50) {
-                        users.erase(users.begin() + i - 1, users.begin() + i +1);
-                        save_result(a.id, b.id);
+				for (uint32_t i = 1; i < users.size(); i++) {
+					auto a = users[i - 1], b = users[i];
+					if (b.score - a.score <= 50) {
+						users.erase(users.begin() + i - 1, users.begin() + i +1);
+						save_result(a.id, b.id);
 
-                        flag = false;
+						flag = false;
 
-                        break;
-                    }
-                }
+						break;
+					}
+				}
 
-                if (flag) break;
+				if (flag) break;
 
-            }
-        }
+			}
+		}
 
 
 
-        void add(User user) {
-            users.push_back(user);
-        }
+		void add(User user) {
+			users.push_back(user);
+		}
 
-        void remove(User user) {
-            for (uint32_t i=0; i < users.size(); i ++ ) {
-                if (users[i].id == user.id) {
-                    users.erase(users.begin() + i);
-                    break;
-                }
-            }
-        }
+		void remove(User user) {
+			for (uint32_t i=0; i < users.size(); i ++ ) {
+				if (users[i].id == user.id) {
+					users.erase(users.begin() + i);
+					break;
+				}
+			}
+		}
 
-    private:
-        vector<User> users;
+	private:
+		vector<User> users;
 }pool;
 
 class MatchHandler : virtual public MatchIf {
-    public:
-        MatchHandler() {
-            // Your initialization goes here
-        }
+	public:
+		MatchHandler() {
+			// Your initialization goes here
+		}
 
-        int32_t add_user(const User& user, const std::string& info) {
-            // Your implementation goes here
-            printf("add_user\n");
+		int32_t add_user(const User& user, const std::string& info) {
+			// Your implementation goes here
+			printf("add_user\n");
 
-            unique_lock<mutex> lck(message_queue.m);  // 加锁
-            message_queue.q.push({user, "add"});
-            message_queue.cv.notify_all();  // 唤醒线程
+			unique_lock<mutex> lck(message_queue.m);  // 加锁
+			message_queue.q.push({user, "add"});
+			message_queue.cv.notify_all();  // 唤醒线程
 
-            return 0;
-        }
+			return 0;
+		}
 
-        int32_t remove_user(const User& user, const std::string& info) {
-            // Your implementation goes here
-            printf("remove_user\n");
+		int32_t remove_user(const User& user, const std::string& info) {
+			// Your implementation goes here
+			printf("remove_user\n");
 
-            unique_lock<mutex> lck(message_queue.m);  // 加锁
-            message_queue.q.push({user, "remove"});
-            message_queue.cv.notify_all();  // 唤醒
+			unique_lock<mutex> lck(message_queue.m);  // 加锁
+			message_queue.q.push({user, "remove"});
+			message_queue.cv.notify_all();  // 唤醒
 
-            return 0;
-        }
+			return 0;
+		}
 
 };
 
+class MatchCloneFactory : virtual public MatchIfFactory {
+	public:
+		~MatchCloneFactory() override = default;
+		MatchIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) override
+		{
+			std::shared_ptr<TSocket> sock = std::dynamic_pointer_cast<TSocket>(connInfo.transport);
+			/*cout << "Incoming connection\n";
+			  cout << "\tSocketInfo: "  << sock->getSocketInfo() << "\n";
+			  cout << "\tPeerHost: "    << sock->getPeerHost() << "\n";
+			  cout << "\tPeerAddress: " << sock->getPeerAddress() << "\n";
+			  cout << "\tPeerPort: "    << sock->getPeerPort() << "\n";*/
+			return new MatchHandler;
+		}
+		void releaseHandler(MatchIf* handler) override {
+			delete handler;
+		}
+};
 
 void consume_task() {
-    while (true) {
-        unique_lock<mutex> lck(message_queue.m);  // 加锁
-        if (message_queue.q.empty()) {
-            // message_queue.cv.wait(lck);  // 阻塞
+	while (true) {
+		unique_lock<mutex> lck(message_queue.m);  // 加锁
+		if (message_queue.q.empty()) {
+			// message_queue.cv.wait(lck);  // 阻塞
 
-            // 每一秒匹配一次
-            lck.unlock();
-            pool.match();
-            sleep(1);
-        } else {
-            auto task = message_queue.q.front();
-            message_queue.q.pop();
-            lck.unlock();  // 解锁
+			// 每一秒匹配一次
+			lck.unlock();
+			pool.match();
+			sleep(1);
+		} else {
+			auto task = message_queue.q.front();
+			message_queue.q.pop();
+			lck.unlock();  // 解锁
 
-            // do task
-            if (task.type == "add") pool.add(task.user);
-            else if (task.type == "remove") pool.remove(task.user);
+			// do task
+			if (task.type == "add") pool.add(task.user);
+			else if (task.type == "remove") pool.remove(task.user);
 
-            pool.match();
+			pool.match();
 
-        }
-    }
+		}
+	}
 }
 int main(int argc, char **argv) {
-    int port = 9090;
-    ::std::shared_ptr<MatchHandler> handler(new MatchHandler());
-    ::std::shared_ptr<TProcessor> processor(new MatchProcessor(handler));
-    ::std::shared_ptr<TServerTransport> serverTransport(new TServerSocket(port));
-    ::std::shared_ptr<TTransportFactory> transportFactory(new TBufferedTransportFactory());
-    ::std::shared_ptr<TProtocolFactory> protocolFactory(new TBinaryProtocolFactory());
+	TThreadedServer server(
+			std::make_shared<MatchProcessorFactory>(std::make_shared<MatchCloneFactory>()),
+			std::make_shared<TServerSocket>(9090), //port
+			std::make_shared<TBufferedTransportFactory>(),
+			std::make_shared<TBinaryProtocolFactory>());
 
-    TSimpleServer server(processor, serverTransport, transportFactory, protocolFactory);
+	cout << "Start Match Server" << endl;
 
-    cout << "Start Match Server" << endl;
+	thread matching_thread(consume_task);
 
-    thread matching_thread(consume_task);
-
-    server.serve();
-    return 0;
+	server.serve();
+	return 0;
 }
 
