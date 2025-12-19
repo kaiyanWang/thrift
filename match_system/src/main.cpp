@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <queue>
 #include <vector>
+#include <unistd.h>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -41,6 +42,9 @@ class pool {
     public:
         void save_result(int a, int b) {
             printf("Match Result: %d %d\n", a, b);
+        }
+        void save_result1(int a, int b) {
+            printf("Match Result: %d %d\n", a, b);
 
             std::shared_ptr<TTransport> socket(new TSocket("123.57.47.211", 9090));
             std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
@@ -63,10 +67,33 @@ class pool {
         }
         void match() {
             while(users.size() > 1) {
-                auto a = users[0], b = users[1];
-                users.erase(users.begin());
-                users.erase(users.begin());  // 删掉了第一个，第二个就变成了第一个
-                save_result(a.id, b.id);
+                // //无脑匹配前两个
+                // auto a = users[0], b = users[1];
+                // users.erase(users.begin());
+                // users.erase(users.begin());  // 删掉了第一个，第二个就变成了第一个
+                // save_result(a.id, b.id);
+
+                // 按分值匹配
+                sort(users.begin(), users.end(), [&](User& a, User b){
+                    return a.score < b.score;
+                });  // 按分值排序
+
+                bool flag = true;
+
+                for (uint32_t i = 1; i < users.size(); i++) {
+                    auto a = users[i - 1], b = users[i];
+                    if (b.score - a.score <= 50) {
+                        users.erase(users.begin() + i - 1, users.begin() + i +1);
+                        save_result(a.id, b.id);
+
+                        flag = false;
+
+                        break;
+                    }
+                }
+
+                if (flag) break;
+
             }
         }
 
@@ -124,7 +151,12 @@ void consume_task() {
     while (true) {
         unique_lock<mutex> lck(message_queue.m);  // 加锁
         if (message_queue.q.empty()) {
-            message_queue.cv.wait(lck);  // 阻塞
+            // message_queue.cv.wait(lck);  // 阻塞
+
+            // 每一秒匹配一次
+            lck.unlock();
+            pool.match();
+            sleep(1);
         } else {
             auto task = message_queue.q.front();
             message_queue.q.pop();
